@@ -1,8 +1,8 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import os
 from supabase import create_client, Client
+import os
 
 
 # =====================================================
@@ -36,13 +36,13 @@ app.add_middleware(
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-supabase: Client | None = None
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise RuntimeError("Supabase environment variables are missing")
 
-if SUPABASE_URL and SUPABASE_KEY:
-    supabase = create_client(
-        SUPABASE_URL,
-        SUPABASE_KEY
-    )
+supabase: Client = create_client(
+    SUPABASE_URL,
+    SUPABASE_KEY
+)
 
 
 # =====================================================
@@ -62,33 +62,68 @@ class TaskUpdate(BaseModel):
 
 
 # =====================================================
+# AUTHENTICATION
+# =====================================================
+
+def get_user(access_token: str | None):
+
+    if not access_token:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required"
+        )
+
+    try:
+        user_response = supabase.auth.get_user(access_token)
+
+        if not user_response.user:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid authentication token"
+            )
+
+        return user_response.user
+
+    except Exception:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired authentication token"
+        )
+
+
+# =====================================================
 # HOME
 # =====================================================
 
 @app.get("/")
 def home():
+
     return {
         "message": "TaskFlow API is running 🚀"
     }
 
 
 # =====================================================
-# GET ALL TASKS
+# GET USER TASKS
 # =====================================================
 
 @app.get("/tasks")
-def get_tasks():
+def get_tasks(
+    authorization: str | None = Header(default=None)
+):
 
-    if supabase is None:
-        raise HTTPException(
-            status_code=500,
-            detail="Supabase is not configured"
-        )
+    token = None
+
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.replace("Bearer ", "")
+
+    user = get_user(token)
 
     response = (
         supabase
         .table("tasks")
         .select("*")
+        .eq("user_id", user.id)
         .order("created_at", desc=True)
         .execute()
     )
@@ -103,13 +138,17 @@ def get_tasks():
 # =====================================================
 
 @app.post("/tasks")
-def create_task(task: TaskCreate):
+def create_task(
+    task: TaskCreate,
+    authorization: str | None = Header(default=None)
+):
 
-    if supabase is None:
-        raise HTTPException(
-            status_code=500,
-            detail="Supabase is not configured"
-        )
+    token = None
+
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.replace("Bearer ", "")
+
+    user = get_user(token)
 
     response = (
         supabase
@@ -117,7 +156,8 @@ def create_task(task: TaskCreate):
         .insert({
             "title": task.title,
             "description": task.description,
-            "status": task.status
+            "status": task.status,
+            "user_id": user.id
         })
         .execute()
     )
@@ -135,14 +175,16 @@ def create_task(task: TaskCreate):
 @app.put("/tasks/{task_id}")
 def update_task(
     task_id: int,
-    task: TaskUpdate
+    task: TaskUpdate,
+    authorization: str | None = Header(default=None)
 ):
 
-    if supabase is None:
-        raise HTTPException(
-            status_code=500,
-            detail="Supabase is not configured"
-        )
+    token = None
+
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.replace("Bearer ", "")
+
+    user = get_user(token)
 
     update_data = {
         key: value
@@ -161,6 +203,7 @@ def update_task(
         .table("tasks")
         .update(update_data)
         .eq("id", task_id)
+        .eq("user_id", user.id)
         .execute()
     )
 
@@ -181,19 +224,24 @@ def update_task(
 # =====================================================
 
 @app.delete("/tasks/{task_id}")
-def delete_task(task_id: int):
+def delete_task(
+    task_id: int,
+    authorization: str | None = Header(default=None)
+):
 
-    if supabase is None:
-        raise HTTPException(
-            status_code=500,
-            detail="Supabase is not configured"
-        )
+    token = None
+
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.replace("Bearer ", "")
+
+    user = get_user(token)
 
     response = (
         supabase
         .table("tasks")
         .delete()
         .eq("id", task_id)
+        .eq("user_id", user.id)
         .execute()
     )
 
